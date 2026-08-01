@@ -571,18 +571,21 @@ let addMode = 'form';
 let convHistory = [];
 
 function renderAdd() {
-  let html = `<div class="sheet-title" style="font-size:20px; margin-bottom:16px;">Nuevo prospecto</div>
+  const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(10,0,0,0);
+  const isoNext  = tomorrow.toISOString().slice(0,16);
+
+  let html = `<div style="font-size:20px;font-weight:700;margin-bottom:16px;">Nuevo prospecto</div>
   <div class="mode-toggle">
     <button class="mode-btn${addMode==='form'?' active':''}" onclick="setAddMode('form')">📋 Formulario</button>
     <button class="mode-btn${addMode==='chat'?' active':''}" onclick="setAddMode('chat')">💬 Conversación</button>
   </div>`;
-  
+
   if (addMode === 'form') {
     html += `
-    <div class="field"><label>Nombre completo *</label><input type="text" id="f-name" placeholder="María García" /></div>
+    <div class="field"><label>Nombre completo *</label><input type="text" id="f-name" placeholder="María García"/></div>
     <div class="field-row">
-      <div class="field"><label>Teléfono</label><input type="tel" id="f-phone" placeholder="55 1234 5678" /></div>
-      <div class="field"><label>Edad</label><input type="number" id="f-age" placeholder="42" min="18" max="80" /></div>
+      <div class="field"><label>Teléfono</label><input type="tel" id="f-phone" placeholder="55 1234 5678"/></div>
+      <div class="field"><label>Edad</label><input type="number" id="f-age" placeholder="42" min="18" max="80"/></div>
     </div>
     <div class="field"><label>Producto de interés</label>
       <select id="f-product">
@@ -593,8 +596,8 @@ function renderAdd() {
       </select>
     </div>
     <div class="field-row">
-      <div class="field"><label>Inversión mensual ($)</label><input type="number" id="f-investment" placeholder="2500" /></div>
-      <div class="field"><label>Ciudad</label><input type="text" id="f-city" placeholder="CDMX" /></div>
+      <div class="field"><label>Inversión mensual ($)</label><input type="number" id="f-investment" placeholder="2500"/></div>
+      <div class="field"><label>Ciudad</label><input type="text" id="f-city" placeholder="CDMX"/></div>
     </div>
     <div class="field"><label>Estado inicial</label>
       <select id="f-status">
@@ -603,9 +606,8 @@ function renderAdd() {
         <option value="hot">🔥 Caliente — listo para cerrar</option>
       </select>
     </div>
-    <div class="field"><label>Notas sobre el cliente</label><textarea id="f-notes" placeholder="Casado, 2 hijos, trabaja en empresa propia. Le preocupa mucho la salud de su esposa..."></textarea></div>
-    <div class="field"><label>¿De dónde viene el prospecto?</label>
-      <select id="f-source" onchange="toggleSourceDetail()">
+    <div class="field"><label>¿De dónde viene?</label>
+      <select id="f-source">
         <option value="recomendacion">👥 Recomendación</option>
         <option value="ukuvi">📱 Ukuvi</option>
         <option value="redes">📲 Redes sociales</option>
@@ -614,21 +616,22 @@ function renderAdd() {
         <option value="otro">✏️ Otro</option>
       </select>
     </div>
-
-      <label>Especifica la fuente</label>
-      <input type="text" id="f-source-detail" placeholder="Ej: Lo conocí en el evento de AMIS, me lo recomendó Juan..." />
-    </div>
-    <div class="field"><label>Notas de prospección</label><textarea id="f-context" placeholder="Lo conocí en una reunión de negocios. Me dijo que ya tuvo un problema médico caro hace 2 años..."></textarea></div>
-    <div class="field"><label>Próximo contacto</label><input type="datetime-local" id="f-next" /></div>
+    <div class="field"><label>Detalle de fuente</label><input type="text" id="f-source-detail" placeholder="Ej: Me lo recomendó Juan, lo conocí en el evento AMIS..."/></div>
+    <div class="field"><label>Notas del cliente</label><textarea id="f-notes" placeholder="Casado, 2 hijos, trabaja por su cuenta..."></textarea></div>
+    <div class="field"><label>Contexto de prospección</label><textarea id="f-context" placeholder="Cómo llegó, qué te dijo, qué le preocupa..."></textarea></div>
+    <div class="field"><label>Próximo contacto</label><input type="datetime-local" id="f-next" value="${isoNext}"/></div>
     <button class="btn btn-primary btn-full" onclick="saveProspectForm()" style="margin-top:8px;">Guardar prospecto</button>`;
   } else {
-    // Chat mode
     if (!convHistory.length) {
       convHistory = [{ role:'assistant', content:'Cuéntame sobre el prospecto. ¿Quién es, qué te dijo, cómo lo conociste? Platícame con tus propias palabras.' }];
     }
     html += `<div class="chat-container" id="add-chat">`;
     convHistory.forEach(m => {
-      html += `<div class="bubble bubble-${m.role==='user'?'user':'ai'}">${m.content}</div>`;
+      if (m.content === '__SAVE_BTN__' && m.data) {
+        html += `<div class="bubble bubble-ai">✅ Datos extraídos: <strong>${m.data.name||'—'}</strong> · ${m.data.product||'—'}<br><button class="btn btn-success btn-sm" style="margin-top:8px;width:100%;" onclick="saveExtractedProspect('${encodeURIComponent(JSON.stringify(m.data))}')">💾 Guardar prospecto</button></div>`;
+      } else {
+        html += `<div class="bubble bubble-${m.role==='user'?'user':'ai'}">${m.content}</div>`;
+      }
     });
     html += `</div>
     <div class="chat-input-row">
@@ -638,14 +641,11 @@ function renderAdd() {
     <div style="height:12px;"></div>
     <button class="btn btn-secondary btn-full" onclick="resetAddChat()">🔄 Empezar de nuevo</button>`;
   }
-  
+
   document.getElementById('add-content').innerHTML = html;
-  if (addMode === 'form') {
-    // Set default next contact to tomorrow
-    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate()+1); tomorrow.setHours(10,0,0,0);
-    const iso = tomorrow.toISOString().slice(0,16);
-    document.getElementById('f-next').value = iso;
-  }
+  // Scroll chat to bottom
+  const chat = document.getElementById('add-chat');
+  if (chat) chat.scrollTop = chat.scrollHeight;
 }
 
 function setAddMode(m) { addMode = m; renderAdd(); }
