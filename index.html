@@ -213,7 +213,7 @@ async function postToSheets(payload) {
   var cfg = loadCfg();
   if (!cfg.scriptUrl) return;
   try {
-    await fetch(cfg.scriptUrl, {method:'POST', body:JSON.stringify(payload), headers:{'Content-Type':'application/json'}});
+    await fetch(cfg.scriptUrl, {method:'POST', body:JSON.stringify(payload), headers:{'Content-Type':'text/plain;charset=utf-8'}});
   } catch(e){}
 }
 async function syncCalendar(p) {
@@ -272,6 +272,8 @@ function avatarColor(name){
   var h=0; for(var i=0;i<(name||'?').length;i++) h=(h*31+(name||'?').charCodeAt(i))%cols.length; return cols[h];
 }
 function initials(n){ if(!n)return '?'; return n.trim().split(' ').slice(0,2).map(function(w){return w[0];}).join('').toUpperCase(); }
+function esc(s){ if(s===undefined||s===null)return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
+var LOADING_DOTS='<span class="loading-dots"><span>●</span><span>●</span><span>●</span></span>';
 function statusBadge(s){
   var labels={hot:'🔥 Caliente',warm:'🌡 Tibio',cold:'❄️ Frío',closed:'✅ Cerrado',lost:'❌ Perdido'};
   var cls={hot:'badge-hot',warm:'badge-warm',cold:'badge-cold',closed:'badge-closed',lost:'badge-lost'};
@@ -305,7 +307,7 @@ function renderToday(){
       var dstr=days===null?'Sin contacto':days===0?'Hoy':days===1?'Ayer':days+'d sin contacto';
       html+='<div class="prospect-row" onclick="openProspect(\''+p.id+'\')">'
         +'<div class="avatar" style="background:'+c[0]+';color:'+c[1]+'">'+initials(p.name)+'</div>'
-        +'<div class="prospect-info"><div class="prospect-name">'+p.name+'</div><div class="prospect-meta">'+productLabel(p.product)+' · '+(p.city||'—')+'</div></div>'
+        +'<div class="prospect-info"><div class="prospect-name">'+esc(p.name)+'</div><div class="prospect-meta">'+productLabel(p.product)+' · '+esc(p.city||'—')+'</div></div>'
         +'<div class="prospect-right">'+statusBadge(p.status||'cold')+'<div class="text-xs">'+dstr+'</div></div>'
         +'</div>';
     });
@@ -342,7 +344,7 @@ function renderProspects(){
       var pInts=db.interactions.filter(function(i){return i.prospectId===p.id;});
       html+='<div class="prospect-row" onclick="openProspect(\''+p.id+'\')">'
         +'<div class="avatar" style="background:'+c[0]+';color:'+c[1]+'">'+initials(p.name)+'</div>'
-        +'<div class="prospect-info"><div class="prospect-name">'+p.name+'</div><div class="prospect-meta">'+productLabel(p.product)+' · '+(p.investment?'$'+Number(p.investment).toLocaleString('es-MX'):'—')+'</div></div>'
+        +'<div class="prospect-info"><div class="prospect-name">'+esc(p.name)+'</div><div class="prospect-meta">'+productLabel(p.product)+' · '+(p.investment?'$'+Number(p.investment).toLocaleString('es-MX'):'—')+'</div></div>'
         +'<div class="prospect-right">'+statusBadge(p.status||'cold')+'<div class="text-xs">'+pInts.length+' int.</div></div>'
         +'</div>';
     });
@@ -388,9 +390,9 @@ function renderAdd(){
     html+='<div class="chat-container" id="add-chat-box">';
     addChat.forEach(function(m){
       if(m.isSaveBtn){
-        html+='<div class="bubble bubble-ai">✅ Listo: <strong>'+(m.data.name||'—')+'</strong> · '+productLabel(m.data.product)+'<br><button class="btn btn-success btn-sm" style="margin-top:8px;width:100%" onclick="saveFromChat(\''+encodeURIComponent(JSON.stringify(m.data))+'\')">💾 Guardar</button></div>';
+        html+='<div class="bubble bubble-ai">✅ Listo: <strong>'+esc(m.data.name||'—')+'</strong> · '+productLabel(m.data.product)+'<br><button class="btn btn-success btn-sm" style="margin-top:8px;width:100%" onclick="saveFromChat(\''+encodeURIComponent(JSON.stringify(m.data))+'\')">💾 Guardar</button></div>';
       } else {
-        html+='<div class="bubble bubble-'+(m.role==='user'?'user':'ai')+'">'+m.content+'</div>';
+        html+='<div class="bubble bubble-'+(m.role==='user'?'user':'ai')+'">'+(m.content===LOADING_DOTS?m.content:esc(m.content))+'</div>';
       }
     });
     html+='</div>'
@@ -450,7 +452,7 @@ async function sendAddMsg(){
   if(!cfg.apiKey){alert('Configura tu API key en ⚙️');return;}
   input.value='';
   addChat.push({role:'user',content:text});
-  addChat.push({role:'assistant',content:'<span class="loading-dots"><span>●</span><span>●</span><span>●</span></span>'});
+  addChat.push({role:'assistant',content:LOADING_DOTS});
   renderAdd();
   var sys='Eres asistente de un asesor de seguros mexicano. Extrae datos del prospecto conversacionalmente. Cuando tengas nombre y producto, responde con "---DATOS---" seguido de JSON en una línea: {"name":"","phone":"","age":"","product":"gmm|retiro|vida|otro","investment":"","city":"","status":"cold|warm|hot","notes":"","source":"otro","sourceDetail":"","context":""}. Si no tienes datos suficientes, sigue conversando en español casual.';
   var msgs=addChat.slice(0,-1).filter(function(m){return (m.role==='user'||m.role==='assistant')&&!m.isSaveBtn;}).map(function(m){return {role:m.role,content:m.content};});
@@ -545,7 +547,7 @@ async function sendFuChat(){
   var hist=pInts.map(function(i){return '- '+fmtDate(i.date)+': '+i.summary;}).join('\n')||'Sin historial.';
   var brainCtx=buildBrainCtx();
   fuChat.push({role:'user',content:text});
-  fuChat.push({role:'assistant',content:'<span class="loading-dots"><span>●</span><span>●</span><span>●</span></span>'});
+  fuChat.push({role:'assistant',content:LOADING_DOTS});
   renderDetail();
   var sys='Eres el asistente de un asesor de seguros mexicano.\nProspecto: '+p.name+' ('+productLabel(p.product)+', '+(p.status||'cold')+').\nHistorial:\n'+hist+(brainCtx?'\n\nContexto del asesor:\n'+brainCtx:'')+'\n\nSi el asesor dice que envió algo o que el cliente respondió, registra la interacción con "---INT---" al final seguido de JSON en una línea: {"summary":"resumen","sent":"texto enviado o vacío","response":"respuesta cliente o vacío"}. Si pide ajustar mensaje, mejóralo. Habla en español mexicano casual.';
   var msgs=fuChat.slice(0,-1).filter(function(m){return m.role==='user'||m.role==='assistant';}).map(function(m){return {role:m.role,content:m.content};});
@@ -617,7 +619,7 @@ function renderDetail(){
   var html='<div class="sheet-handle"></div>'
     +'<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">'
     +'<div class="avatar" style="background:'+c[0]+';color:'+c[1]+';width:52px;height:52px;font-size:18px">'+initials(p.name)+'</div>'
-    +'<div style="flex:1;min-width:0"><div style="font-size:18px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+p.name+'</div><div class="text-sm">'+productLabel(p.product)+' · '+(p.phone||'Sin teléfono')+'</div></div>'
+    +'<div style="flex:1;min-width:0"><div style="font-size:18px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.name)+'</div><div class="text-sm">'+productLabel(p.product)+' · '+esc(p.phone||'Sin teléfono')+'</div></div>'
     +statusBadge(p.status||'cold')+'</div>'
     +'<div class="tabs">'
     +'<button class="tab'+(detailTab==='followup'?' active':'')+'" onclick="switchDetailTab(\'followup\')">🎯 Seguimiento</button>'
@@ -629,10 +631,10 @@ function renderDetail(){
     else if(genRunning){ html+='<div class="rec-card" style="text-align:center;padding:24px"><div class="loading-dots" style="font-size:16px;color:var(--accent-text)"><span>●</span><span>●</span><span>●</span></div><div style="margin-top:8px;font-size:14px;color:var(--accent-text)">Analizando...</div></div>'; }
     else if(p._rec){
       var rec=p._rec;
-      html+='<div class="rec-card"><div class="rec-type">'+rec.type+'</div><div class="rec-title">'+rec.title+'</div>'
+      html+='<div class="rec-card"><div class="rec-type">'+esc(rec.type)+'</div><div class="rec-title">'+esc(rec.title)+'</div>'
         +'<div style="font-size:13px;color:var(--accent-text);margin-bottom:8px">💬 Mensaje sugerido</div>'
-        +'<div class="rec-message">'+rec.message+'</div>'
-        +'<div class="rec-reason">💡 <strong>Por qué:</strong> '+rec.reason+'</div></div>'
+        +'<div class="rec-message">'+esc(rec.message)+'</div>'
+        +'<div class="rec-reason">💡 <strong>Por qué:</strong> '+esc(rec.reason)+'</div></div>'
         +'<div style="display:flex;gap:8px;margin-bottom:16px">'
         +'<button class="btn btn-secondary btn-sm" onclick="refreshRec()" style="flex:1">🔄 Nueva sugerencia</button>'
         +'<button class="btn btn-primary btn-sm" onclick="copyMsg(\''+encodeURIComponent(rec.message)+'\')" style="flex:1">📋 Copiar</button>'
@@ -642,8 +644,8 @@ function renderDetail(){
     }
     html+='<div class="section-header">Afinar o registrar</div>'
       +'<div class="chat-container" id="fu-chat" style="max-height:240px">';
-    if(!fuChat.length) html+='<div class="bubble bubble-ai">¿Qué pasó con '+p.name.split(' ')[0]+'? Cuéntame qué le enviaste, qué respondió, o pídeme que ajuste el mensaje.</div>';
-    fuChat.forEach(function(m){ html+='<div class="bubble bubble-'+(m.role==='user'?'user':'ai')+'">'+m.content+'</div>'; });
+    if(!fuChat.length) html+='<div class="bubble bubble-ai">¿Qué pasó con '+esc(p.name.split(' ')[0])+'? Cuéntame qué le enviaste, qué respondió, o pídeme que ajuste el mensaje.</div>';
+    fuChat.forEach(function(m){ html+='<div class="bubble bubble-'+(m.role==='user'?'user':'ai')+'">'+(m.content===LOADING_DOTS?m.content:esc(m.content))+'</div>'; });
     html+='</div>'
       +'<div class="chat-input-row">'
       +'<textarea id="fu-input" placeholder="Le mandé... / Me respondió... / Ajusta el mensaje..." rows="1" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendFuChat();}"></textarea>'
@@ -652,7 +654,7 @@ function renderDetail(){
       +'<div class="divider"></div>'
       +'<div class="section-header">Próximo contacto</div>'
       +'<div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">'
-      +'<input type="datetime-local" id="nc-input" value="'+(p.nextContact||'')+'" style="flex:1;padding:10px 12px;border-radius:var(--radius);border:.5px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:15px"/>'
+      +'<input type="datetime-local" id="nc-input" value="'+esc(p.nextContact||'')+'" style="flex:1;padding:10px 12px;border-radius:var(--radius);border:.5px solid var(--border-strong);background:var(--surface);color:var(--text);font-size:15px"/>'
       +'<button class="btn btn-secondary btn-sm" onclick="saveNextContact()">Guardar</button>'
       +'</div>'
       +'<div class="divider"></div><div class="section-header">Historial</div>';
@@ -660,7 +662,7 @@ function renderDetail(){
     else {
       html+='<div class="timeline">';
       pInts.forEach(function(i){
-        html+='<div class="tl-item"><div class="tl-dot"></div><div class="tl-date">'+fmtDT(i.date)+'</div><div class="tl-content">'+i.summary+'</div>'+(i.sent?'<div class="tl-sent">Enviado: "'+i.sent+'"</div>':'')+(i.response?'<div class="tl-sent" style="color:var(--success)">Respuesta: "'+i.response+'"</div>':'')+'</div>';
+        html+='<div class="tl-item"><div class="tl-dot"></div><div class="tl-date">'+fmtDT(i.date)+'</div><div class="tl-content">'+esc(i.summary)+'</div>'+(i.sent?'<div class="tl-sent">Enviado: "'+esc(i.sent)+'"</div>':'')+(i.response?'<div class="tl-sent" style="color:var(--success)">Respuesta: "'+esc(i.response)+'"</div>':'')+'</div>';
       });
       html+='</div>';
     }
@@ -676,20 +678,20 @@ function renderDetail(){
       +'</div><div class="divider"></div>'
       +'<table style="width:100%;font-size:14px">'
       +'<tr><td class="text-xs" style="padding:5px 0;width:40%">Edad</td><td style="padding:5px 0;font-weight:500">'+(p.age?p.age+' años':'—')+'</td></tr>'
-      +'<tr><td class="text-xs" style="padding:5px 0">Teléfono</td><td style="padding:5px 0;font-weight:500">'+(p.phone||'—')+'</td></tr>'
-      +'<tr><td class="text-xs" style="padding:5px 0">Ciudad</td><td style="padding:5px 0;font-weight:500">'+(p.city||'—')+'</td></tr>'
+      +'<tr><td class="text-xs" style="padding:5px 0">Teléfono</td><td style="padding:5px 0;font-weight:500">'+esc(p.phone||'—')+'</td></tr>'
+      +'<tr><td class="text-xs" style="padding:5px 0">Ciudad</td><td style="padding:5px 0;font-weight:500">'+esc(p.city||'—')+'</td></tr>'
       +'<tr><td class="text-xs" style="padding:5px 0">Inversión/mes</td><td style="padding:5px 0;font-weight:500">'+(p.investment?'$'+Number(p.investment).toLocaleString('es-MX'):'—')+'</td></tr>'
-      +'<tr><td class="text-xs" style="padding:5px 0">Fuente</td><td style="padding:5px 0;font-weight:500">'+sourceLabel(p.source)+(p.sourceDetail?' — '+p.sourceDetail:'')+'</td></tr>'
+      +'<tr><td class="text-xs" style="padding:5px 0">Fuente</td><td style="padding:5px 0;font-weight:500">'+sourceLabel(p.source)+(p.sourceDetail?' — '+esc(p.sourceDetail):'')+'</td></tr>'
       +'<tr><td class="text-xs" style="padding:5px 0">Registrado</td><td style="padding:5px 0;font-weight:500">'+fmtDate(p.createdAt)+'</td></tr>'
       +'<tr><td class="text-xs" style="padding:5px 0">Interacciones</td><td style="padding:5px 0;font-weight:500">'+pInts.length+'</td></tr>'
       +'</table></div></div>'
       +'<div class="section-header">Editar datos</div><div class="card"><div class="card-body">'
-      +'<div class="field"><label>Notas del cliente</label><textarea id="e-notes" style="min-height:70px">'+(p.notes||'')+'</textarea></div>'
-      +'<div class="field"><label>Contexto de prospección</label><textarea id="e-context" style="min-height:70px">'+(p.context||'')+'</textarea></div>'
-      +'<div class="field-row"><div class="field"><label>Teléfono</label><input type="tel" id="e-phone" value="'+(p.phone||'')+'"/></div><div class="field"><label>Ciudad</label><input type="text" id="e-city" value="'+(p.city||'')+'"/></div></div>'
-      +'<div class="field-row"><div class="field"><label>Inversión ($)</label><input type="number" id="e-invest" value="'+(p.investment||'')+'"/></div><div class="field"><label>Edad</label><input type="number" id="e-age" value="'+(p.age||'')+'"/></div></div>'
+      +'<div class="field"><label>Notas del cliente</label><textarea id="e-notes" style="min-height:70px">'+esc(p.notes||'')+'</textarea></div>'
+      +'<div class="field"><label>Contexto de prospección</label><textarea id="e-context" style="min-height:70px">'+esc(p.context||'')+'</textarea></div>'
+      +'<div class="field-row"><div class="field"><label>Teléfono</label><input type="tel" id="e-phone" value="'+esc(p.phone||'')+'"/></div><div class="field"><label>Ciudad</label><input type="text" id="e-city" value="'+esc(p.city||'')+'"/></div></div>'
+      +'<div class="field-row"><div class="field"><label>Inversión ($)</label><input type="number" id="e-invest" value="'+esc(p.investment||'')+'"/></div><div class="field"><label>Edad</label><input type="number" id="e-age" value="'+esc(p.age||'')+'"/></div></div>'
       +'<div class="field"><label>Fuente</label><select id="e-source"><option value="recomendacion"'+(p.source==='recomendacion'?' selected':'')+'>👥 Recomendación</option><option value="ukuvi"'+(p.source==='ukuvi'?' selected':'')+'>📱 Ukuvi</option><option value="redes"'+(p.source==='redes'?' selected':'')+'>📲 Redes</option><option value="evento"'+(p.source==='evento'?' selected':'')+'>🎪 Evento</option><option value="frio"'+(p.source==='frio'?' selected':'')+'>📞 Llamada en frío</option><option value="otro"'+(p.source==='otro'?' selected':'')+'>✏️ Otro</option></select></div>'
-      +'<div class="field"><label>Detalle fuente</label><input type="text" id="e-srcdet" value="'+(p.sourceDetail||'')+'"/></div>'
+      +'<div class="field"><label>Detalle fuente</label><input type="text" id="e-srcdet" value="'+esc(p.sourceDetail||'')+'"/></div>'
       +'<button class="btn btn-primary btn-full" onclick="saveProfileEdits(\''+p.id+'\')">Guardar cambios</button>'
       +'</div></div>';
   }
@@ -742,7 +744,8 @@ function renderBrain(){
     html+='<div class="chat-container" id="brain-chat" style="max-height:calc(100vh - 360px);min-height:180px">';
     if(!brainChat.length) html+='<div class="bubble bubble-ai">Hola. Soy tu segundo cerebro. Podemos hablar sobre cómo manejar situaciones, afinar tus mensajes, definir reglas, o lo que necesites. Si no estoy de acuerdo contigo en algo, te lo digo. ¿Por dónde empezamos?</div>';
     brainChat.forEach(function(m,idx){
-      var display=m.content.replace(/---MEM---[\s\S]*?(\n|$)/g,'').replace(/---DEL---[\s\S]*?(\n|$)/g,'').replace(/---EDIT---[\s\S]*?(\n|$)/g,'').trim();
+      var isLoading=(m.content===LOADING_DOTS);
+      var display=isLoading?m.content:esc(m.content.replace(/---MEM---[\s\S]*?(\n|$)/g,'').replace(/---DEL---[\s\S]*?(\n|$)/g,'').replace(/---EDIT---[\s\S]*?(\n|$)/g,'').trim());
       if(m.role==='user'){
         html+='<div class="bubble bubble-user">'+display+'</div>';
       } else {
@@ -751,7 +754,7 @@ function renderBrain(){
           var cat=MEM_CATS[m.memData.cat]||{icon:'📌',label:'Memoria'};
           html+='<div style="margin-top:10px;padding-top:10px;border-top:.5px solid var(--border)">'
             +'<div class="text-xs" style="margin-bottom:6px">'+cat.icon+' Sugerencia ('+cat.label+'):</div>'
-            +'<div style="font-size:13px;background:var(--surface);border-radius:8px;padding:8px 10px;margin-bottom:8px">'+m.memData.text+'</div>'
+            +'<div style="font-size:13px;background:var(--surface);border-radius:8px;padding:8px 10px;margin-bottom:8px">'+esc(m.memData.text)+'</div>'
             +'<div style="display:flex;gap:6px">'
             +'<button class="btn btn-success btn-sm" onclick="saveBrainMem('+idx+')" style="flex:1">📌 Guardar</button>'
             +'<button class="btn btn-secondary btn-sm" onclick="dismissMem('+idx+')">✕</button>'
@@ -779,7 +782,7 @@ function renderBrain(){
         if(!catMems.length)return;
         html+='<div class="section-header">'+MEM_CATS[cat].icon+' '+MEM_CATS[cat].label+'</div><div class="card">';
         catMems.forEach(function(m){
-          html+='<div class="mem-row"><div style="flex:1;font-size:14px;line-height:1.6">'+m.text+'</div>'
+          html+='<div class="mem-row"><div style="flex:1;font-size:14px;line-height:1.6">'+esc(m.text)+'</div>'
             +'<div style="display:flex;gap:6px;flex-shrink:0;margin-top:2px">'
             +'<button class="btn btn-secondary btn-sm" onclick="editMem(\''+m.id+'\')" style="padding:4px 8px;font-size:12px">✏️</button>'
             +'<button class="btn btn-secondary btn-sm" onclick="deleteMem(\''+m.id+'\')" style="padding:4px 8px;font-size:12px;color:var(--danger)">✕</button>'
@@ -809,7 +812,7 @@ async function sendBrainChat(){
   var cfg=loadCfg(); if(!cfg.apiKey){alert('Configura tu API key en ⚙️');return;}
   input.value='';
   brainChat.push({role:'user',content:text});
-  brainChat.push({role:'assistant',content:'<span class="loading-dots"><span>●</span><span>●</span><span>●</span></span>'});
+  brainChat.push({role:'assistant',content:LOADING_DOTS});
   saveBChat(brainChat); renderBrain();
   var sys=buildBrainSys();
   var msgs=brainChat.slice(0,-1).filter(function(m){return m.role==='user'||m.role==='assistant';}).map(function(m){return {role:m.role,content:m.content.replace(/---MEM---[\s\S]*?(\n|$)/g,'').replace(/---DEL---[\s\S]*/g,'').replace(/---EDIT---[\s\S]*/g,'').trim()};}).filter(function(m){return m.content.length>0;});
