@@ -457,7 +457,7 @@ async function sendAddMsg(){
   var sys='Eres asistente de un asesor de seguros mexicano. Extrae datos del prospecto conversacionalmente. Cuando tengas nombre y producto, responde con "---DATOS---" seguido de JSON en una línea: {"name":"","phone":"","age":"","product":"gmm|retiro|vida|otro","investment":"","city":"","status":"cold|warm|hot","notes":"","source":"otro","sourceDetail":"","context":""}. Si no tienes datos suficientes, sigue conversando en español casual.';
   var msgs=addChat.slice(0,-1).filter(function(m){return (m.role==='user'||m.role==='assistant')&&!m.isSaveBtn;}).map(function(m){return {role:m.role,content:m.content};});
   try{
-    var res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':cfg.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-sonnet-4-6',max_tokens:800,system:sys,messages:msgs})});
+    var res=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':cfg.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model:'claude-haiku-4-5-20251001',max_tokens:800,system:sys,messages:msgs})});
     var data=await res.json();
     var reply=(data.content&&data.content[0]&&data.content[0].text)||'Error.';
     var display=reply.split('---DATOS---')[0].trim();
