@@ -1187,34 +1187,140 @@ function deleteProspect(id) {
 }
 
 // ====== SHEETS SYNC ======
+
+
+
+
+// ====== SYNC =========================================================
+
 async function syncToSheets(data, type) {
   const cfg = loadCfg();
   if (!cfg.scriptUrl) return;
   try {
     await fetch(cfg.scriptUrl, {
-      method:'POST',
+      method: 'POST',
       body: JSON.stringify({ type, data }),
-      headers: { 'Content-Type':'application/json' }
+      headers: { 'Content-Type': 'application/json' }
     });
-    // If prospect has nextContact, also create calendar event
     if (type === 'prospect' && data.nextContact) {
       await syncCalendar(data);
     }
-  } catch {}
+  } catch(e) {}
 }
 
-// ====== SHEET HELPERS ======
-function openSheet(id) { document.getElementById(id).classList.add('open'); }
+// Pull everything from Sheets and merge into localStorage
+async function syncFromSheets() {
+  const cfg = loadCfg();
+  if (!cfg.scriptUrl) return false;
+  try {
+    const res  = await fetch(cfg.scriptUrl + '?t=' + Date.now());
+    const data = await res.json();
+    if (!data.ok) return false;
+
+    // --- Prospects: Sheets is source of truth ---
+    // Map Sheets column names to app field names
+    const mapProspect = (r) => ({
+      id:           r.id           || r['id']           || '',
+      name:         r.name         || r['name']         || '',
+      phone:        r.phone        || r['phone']        || '',
+      age:          r.age          || r['age']          || '',
+      product:      r.product      || r['product']      || '',
+      investment:   r.investment   || r['investment']   || '',
+      city:         r.city         || r['city']         || '',
+      status:       r.status       || r['status']       || 'cold',
+      probability:  Number(r.probability || r['probability'] || 20),
+      source:       r.source       || r['source']       || '',
+      sourceDetail: r.sourceDetail || r['sourceDetail'] || '',
+      notes:        r.notes        || r['notes']        || '',
+      context:      r.context      || r['context']      || '',
+      nextContact:  r.nextContact  || r['nextContact']  || '',
+      createdAt:    r.createdAt    || r['createdAt']    || new Date().toISOString(),
+      _rec:         null // always regenerate on load
+    });
+
+    const mapInteraction = (r) => ({
+      id:          r.id          || '',
+      prospectId:  r.prospectId  || '',
+      date:        r.date        || '',
+      summary:     r.summary     || '',
+      sent:        r.sent        || '',
+      response:    r.response    || ''
+    });
+
+    // Merge: keep local _rec cache if prospect id matches
+    const localDB = loadDB();
+    const localRecCache = {};
+    localDB.prospects.forEach(p => { if (p._rec) localRecCache[p.id] = p._rec; });
+
+    const prospects    = (data.prospects    || []).map(mapProspect);
+    const interactions = (data.interactions || []).map(mapInteraction);
+
+    // Restore rec cache
+    prospects.forEach(p => { if (localRecCache[p.id]) p._rec = localRecCache[p.id]; });
+
+    saveDB({ prospects, interactions });
+
+    // --- Brain memories ---
+    if (data.brain && data.brain.length) {
+      const brain = loadBrain();
+      const remoteIds = new Set(data.brain.map(m => m.id));
+      // Add remote memories not in local
+      data.brain.forEach(rm => {
+        if (!brain.memories.find(lm => lm.id === rm.id)) {
+          brain.memories.push({
+            id:        rm.id,
+            cat:       rm.cat,
+            text:      rm.text,
+            createdAt: rm.createdAt || new Date().toISOString(),
+            deleted:   rm.deleted === 'true'
+          });
+        } else {
+          // Update text/deleted status from remote
+          const idx = brain.memories.findIndex(lm => lm.id === rm.id);
+          if (idx !== -1) {
+            brain.memories[idx].text    = rm.text;
+            brain.memories[idx].deleted = rm.deleted === 'true';
+          }
+        }
+      });
+      saveBrain(brain);
+    }
+
+    return true;
+  } catch(e) {
+    console.warn('Sync from Sheets failed:', e);
+    return false;
+  }
+}
+
+// ====== SHEET HELPERS ================================================
+function openSheet(id)  { document.getElementById(id).classList.add('open'); }
 function closeSheet(id) { document.getElementById(id).classList.remove('open'); }
 
-// Close on overlay click
 document.querySelectorAll('.sheet-overlay').forEach(el => {
   el.addEventListener('click', e => { if (e.target === el) closeSheet(el.id); });
 });
 
-// ====== INIT ======
+// ====== INIT =========================================================
 document.getElementById('nav-date').textContent = new Date().toLocaleDateString('es-MX', { weekday:'long', day:'numeric', month:'long' });
-renderToday();
+
+(async function init() {
+  // Show app immediately with local data
+  renderToday();
+
+  // Then try to pull from Sheets in background
+  const cfg = loadCfg();
+  if (cfg.scriptUrl) {
+    // Show a subtle sync indicator
+    const navSub = document.getElementById('nav-date');
+    const originalText = navSub.textContent;
+    navSub.textContent = originalText + ' · sincronizando...';
+    const ok = await syncFromSheets();
+    navSub.textContent = originalText + (ok ? ' · ✓ sincronizado' : ' · sin conexión');
+    setTimeout(() => { navSub.textContent = originalText; }, 3000);
+    if (ok) renderToday(); // refresh with synced data
+  }
+})();
 
 // Handle add chat save button rendering
 const origRenderAddFn = window.renderAdd;
@@ -1537,17 +1643,15 @@ async function sendBrainChat() {
   renderBrain();
 }
 
+
 function saveMemoryFromChat(msgIdx) {
   const msg = brainChat[msgIdx];
   if (!msg || !msg.memoryData) return;
+  const mem = { id: uid(), cat: msg.memoryData.cat, text: msg.memoryData.text, createdAt: new Date().toISOString() };
   const brain = loadBrain();
-  brain.memories.push({
-    id: uid(),
-    cat: msg.memoryData.cat,
-    text: msg.memoryData.text,
-    createdAt: new Date().toISOString()
-  });
+  brain.memories.push(mem);
   saveBrain(brain);
+  syncToSheets(mem, 'brain');
   brainChat[msgIdx].memorySaved = true;
   saveBrainChat(brainChat);
   renderBrain();
@@ -1555,44 +1659,52 @@ function saveMemoryFromChat(msgIdx) {
 
 function dismissMemory(msgIdx) {
   if (brainChat[msgIdx]) {
-    brainChat[msgIdx].memorySaved = true; // hide the button
+    brainChat[msgIdx].memorySaved = true;
     saveBrainChat(brainChat);
     renderBrain();
   }
 }
 
 function addMemoryManual() {
-  const cat = document.getElementById('new-mem-cat').value;
+  const cat  = document.getElementById('new-mem-cat').value;
   const text = document.getElementById('new-mem-text').value.trim();
   if (!text) { alert('Escribe la memoria primero'); return; }
+  const mem  = { id: uid(), cat, text, createdAt: new Date().toISOString() };
   const brain = loadBrain();
-  brain.memories.push({ id: uid(), cat, text, createdAt: new Date().toISOString() });
+  brain.memories.push(mem);
   saveBrain(brain);
+  syncToSheets(mem, 'brain');
   renderBrain();
 }
 
 function deleteMemory(id, silent = false) {
   if (!silent && !confirm('¿Eliminar esta memoria?')) return;
   const brain = loadBrain();
-  const idx = brain.memories.findIndex(m => m.id === id);
+  const idx   = brain.memories.findIndex(m => m.id === id);
   if (idx !== -1) { brain.memories[idx].deleted = true; saveBrain(brain); }
+  syncToSheets({ id }, 'brain_delete');
   if (!silent) renderBrain();
 }
 
 function editMemoryById(id, newText) {
   const brain = loadBrain();
-  const idx = brain.memories.findIndex(m => m.id === id);
-  if (idx !== -1) { brain.memories[idx].text = newText; saveBrain(brain); }
+  const idx   = brain.memories.findIndex(m => m.id === id);
+  if (idx !== -1) {
+    brain.memories[idx].text = newText;
+    saveBrain(brain);
+    syncToSheets({ id, cat: brain.memories[idx].cat, text: newText, createdAt: brain.memories[idx].createdAt }, 'brain');
+  }
 }
 
 function editMemory(id) {
-  const brain = loadBrain();
-  const mem = brain.memories.find(m => m.id === id);
+  const brain  = loadBrain();
+  const mem    = brain.memories.find(m => m.id === id);
   if (!mem) return;
   const newText = prompt('Editar memoria:', mem.text);
   if (newText === null || !newText.trim()) return;
   mem.text = newText.trim();
   saveBrain(brain);
+  syncToSheets({ id, cat: mem.cat, text: mem.text, createdAt: mem.createdAt }, 'brain');
   renderBrain();
 }
 
