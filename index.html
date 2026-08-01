@@ -350,14 +350,24 @@ function openSettings() {
   document.getElementById('cfg-voice').value = cfg.voice || '';
   openSheet('sheet-settings');
 }
-function saveSettings() {
+async function saveSettings() {
   const cfg = {
-    apiKey: document.getElementById('cfg-api-key').value.trim(),
-    sheetsId: document.getElementById('cfg-sheets-id').value.trim(),
+    apiKey:    document.getElementById('cfg-api-key').value.trim(),
+    sheetsId:  document.getElementById('cfg-sheets-id') ? document.getElementById('cfg-sheets-id').value.trim() : '',
     scriptUrl: document.getElementById('cfg-script-url').value.trim(),
-    voice: document.getElementById('cfg-voice').value.trim(),
+    voice:     document.getElementById('cfg-voice').value.trim(),
   };
   saveCfg(cfg);
+  // Push voice/config to Sheets so other devices get it
+  if (cfg.scriptUrl && cfg.voice) {
+    try {
+      await fetch(cfg.scriptUrl, {
+        method: 'POST',
+        body: JSON.stringify({ type: 'config', data: { voice: cfg.voice } }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch(e) {}
+  }
   closeSheet('sheet-settings');
   renderAll();
   alert('✅ Configuración guardada');
@@ -1187,12 +1197,7 @@ function deleteProspect(id) {
 }
 
 // ====== SHEETS SYNC ======
-
-
-
-
-// ====== SYNC =========================================================
-
+// ── Push data to Sheets ──────────────────────────────────────────────────────
 async function syncToSheets(data, type) {
   const cfg = loadCfg();
   if (!cfg.scriptUrl) return;
@@ -1208,7 +1213,7 @@ async function syncToSheets(data, type) {
   } catch(e) {}
 }
 
-// Pull everything from Sheets and merge into localStorage
+// ── Pull everything from Sheets → merge into localStorage ─────────────────
 async function syncFromSheets() {
   const cfg = loadCfg();
   if (!cfg.scriptUrl) return false;
@@ -1217,83 +1222,63 @@ async function syncFromSheets() {
     const data = await res.json();
     if (!data.ok) return false;
 
-    // --- Prospects: Sheets is source of truth ---
-    // Map Sheets column names to app field names
-    const mapProspect = (r) => ({
-      id:           r.id           || r['id']           || '',
-      name:         r.name         || r['name']         || '',
-      phone:        r.phone        || r['phone']        || '',
-      age:          r.age          || r['age']          || '',
-      product:      r.product      || r['product']      || '',
-      investment:   r.investment   || r['investment']   || '',
-      city:         r.city         || r['city']         || '',
-      status:       r.status       || r['status']       || 'cold',
-      probability:  Number(r.probability || r['probability'] || 20),
-      source:       r.source       || r['source']       || '',
-      sourceDetail: r.sourceDetail || r['sourceDetail'] || '',
-      notes:        r.notes        || r['notes']        || '',
-      context:      r.context      || r['context']      || '',
-      nextContact:  r.nextContact  || r['nextContact']  || '',
-      createdAt:    r.createdAt    || r['createdAt']    || new Date().toISOString(),
-      _rec:         null // always regenerate on load
-    });
+    // Prospects
+    if (data.prospects) {
+      const localDB = loadDB();
+      const recCache = {};
+      localDB.prospects.forEach(p => { if (p._rec) recCache[p.id] = p._rec; });
+      const prospects = data.prospects.map(r => ({
+        id: r.id, name: r.name, phone: r.phone, age: r.age,
+        product: r.product, investment: r.investment, city: r.city,
+        status: r.status || 'cold', probability: Number(r.probability || 20),
+        source: r.source, sourceDetail: r.sourceDetail,
+        notes: r.notes, context: r.context,
+        nextContact: r.nextContact, createdAt: r.createdAt,
+        _rec: recCache[r.id] || null
+      }));
+      const interactions = (data.interactions || []).map(r => ({
+        id: r.id, prospectId: r.prospectId, date: r.date,
+        summary: r.summary, sent: r.sent, response: r.response
+      }));
+      saveDB({ prospects, interactions });
+    }
 
-    const mapInteraction = (r) => ({
-      id:          r.id          || '',
-      prospectId:  r.prospectId  || '',
-      date:        r.date        || '',
-      summary:     r.summary     || '',
-      sent:        r.sent        || '',
-      response:    r.response    || ''
-    });
-
-    // Merge: keep local _rec cache if prospect id matches
-    const localDB = loadDB();
-    const localRecCache = {};
-    localDB.prospects.forEach(p => { if (p._rec) localRecCache[p.id] = p._rec; });
-
-    const prospects    = (data.prospects    || []).map(mapProspect);
-    const interactions = (data.interactions || []).map(mapInteraction);
-
-    // Restore rec cache
-    prospects.forEach(p => { if (localRecCache[p.id]) p._rec = localRecCache[p.id]; });
-
-    saveDB({ prospects, interactions });
-
-    // --- Brain memories ---
+    // Brain memories
     if (data.brain && data.brain.length) {
       const brain = loadBrain();
-      const remoteIds = new Set(data.brain.map(m => m.id));
-      // Add remote memories not in local
       data.brain.forEach(rm => {
-        if (!brain.memories.find(lm => lm.id === rm.id)) {
-          brain.memories.push({
-            id:        rm.id,
-            cat:       rm.cat,
-            text:      rm.text,
-            createdAt: rm.createdAt || new Date().toISOString(),
-            deleted:   rm.deleted === 'true'
-          });
+        const idx = brain.memories.findIndex(lm => lm.id === rm.id);
+        if (idx === -1) {
+          brain.memories.push({ id: rm.id, cat: rm.cat, text: rm.text,
+            createdAt: rm.createdAt, deleted: rm.deleted === 'true' });
         } else {
-          // Update text/deleted status from remote
-          const idx = brain.memories.findIndex(lm => lm.id === rm.id);
-          if (idx !== -1) {
-            brain.memories[idx].text    = rm.text;
-            brain.memories[idx].deleted = rm.deleted === 'true';
-          }
+          brain.memories[idx].text    = rm.text;
+          brain.memories[idx].deleted = rm.deleted === 'true';
         }
       });
       saveBrain(brain);
     }
 
+    // Voice / config (synced from Sheets, never overrides apiKey or scriptUrl)
+    if (data.config && data.config.voice) {
+      const cfg2 = loadCfg();
+      if (!cfg2.voice) {          // only auto-fill if local is empty
+        cfg2.voice = data.config.voice;
+        saveCfg(cfg2);
+        // Update the settings field if it's open
+        const el = document.getElementById('cfg-voice');
+        if (el) el.value = cfg2.voice;
+      }
+    }
+
     return true;
   } catch(e) {
-    console.warn('Sync from Sheets failed:', e);
+    console.warn('syncFromSheets error:', e);
     return false;
   }
 }
 
-// ====== SHEET HELPERS ================================================
+// ====== SHEET HELPERS ======
 function openSheet(id)  { document.getElementById(id).classList.add('open'); }
 function closeSheet(id) { document.getElementById(id).classList.remove('open'); }
 
@@ -1301,25 +1286,27 @@ document.querySelectorAll('.sheet-overlay').forEach(el => {
   el.addEventListener('click', e => { if (e.target === el) closeSheet(el.id); });
 });
 
-// ====== INIT =========================================================
+// ====== INIT ======
 document.getElementById('nav-date').textContent = new Date().toLocaleDateString('es-MX', { weekday:'long', day:'numeric', month:'long' });
 
 (async function init() {
-  // Show app immediately with local data
+  // Show immediately with whatever is in localStorage
   renderToday();
 
-  // Then try to pull from Sheets in background
   const cfg = loadCfg();
-  if (cfg.scriptUrl) {
-    // Show a subtle sync indicator
-    const navSub = document.getElementById('nav-date');
-    const originalText = navSub.textContent;
-    navSub.textContent = originalText + ' · sincronizando...';
-    const ok = await syncFromSheets();
-    navSub.textContent = originalText + (ok ? ' · ✓ sincronizado' : ' · sin conexión');
-    setTimeout(() => { navSub.textContent = originalText; }, 3000);
-    if (ok) renderToday(); // refresh with synced data
-  }
+  if (!cfg.scriptUrl) return;
+
+  // Subtle sync indicator in the date line
+  const navSub     = document.getElementById('nav-date');
+  const dateText   = navSub.textContent;
+  navSub.textContent = dateText + ' · sincronizando...';
+
+  const ok = await syncFromSheets();
+
+  navSub.textContent = dateText + (ok ? ' · ✓ sync' : '');
+  setTimeout(() => { navSub.textContent = dateText; }, 2500);
+
+  if (ok) renderToday();
 })();
 
 // Handle add chat save button rendering
@@ -1643,7 +1630,6 @@ async function sendBrainChat() {
   renderBrain();
 }
 
-
 function saveMemoryFromChat(msgIdx) {
   const msg = brainChat[msgIdx];
   if (!msg || !msg.memoryData) return;
@@ -1659,7 +1645,7 @@ function saveMemoryFromChat(msgIdx) {
 
 function dismissMemory(msgIdx) {
   if (brainChat[msgIdx]) {
-    brainChat[msgIdx].memorySaved = true;
+    brainChat[msgIdx].memorySaved = true; // hide the button
     saveBrainChat(brainChat);
     renderBrain();
   }
