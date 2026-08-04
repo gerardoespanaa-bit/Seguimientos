@@ -775,18 +775,31 @@ function refreshRec(){ var db=loadDB(); var idx=db.prospects.findIndex(function(
 
 function copyMsg(encoded){ var msg=decodeURIComponent(encoded); if(navigator.clipboard){navigator.clipboard.writeText(msg).then(function(){alert('✅ Copiado');}).catch(function(){prompt('Copia:',msg);});}else{prompt('Copia:',msg);} }
 
-async function saveNextContact(){
-  var val=document.getElementById('nc-input')?document.getElementById('nc-input').value:'';
-  var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===currentId;});
-  if(idx===-1)return;
-  db.prospects[idx].nextContact=val;
-  stampUpdated(db.prospects[idx]);
+async function saveNextContact() {
+  var val = document.getElementById('nc-input')
+            ? document.getElementById('nc-input').value : '';
+  var db  = loadDB();
+  var idx = db.prospects.findIndex(function(x){ return x.id === currentId; });
+  if (idx === -1) return;
+
+  // 1. Actualiza en localStorage
+  db.prospects[idx].nextContact = val;
+  db.prospects[idx].updatedAt   = new Date().toISOString();
   saveDB(db);
-  var cfg=loadCfg();
-  var okProspect = await postToSheets({type:'prospect', data:prospectForSync(db.prospects[idx])});
-  if(val) await syncCalendar(db.prospects[idx]);
-  if(okProspect===false) alert('⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.');
-  else alert(cfg.scriptUrl && val ? '✅ Guardado · Recordatorio en Calendar' : '✅ Guardado');
+
+  // 2. Sube el prospecto completo a Sheets (incluye nextContact)
+  postToSheets({ type: 'prospect', data: db.prospects[idx] });
+
+  // 3. Crea/actualiza el evento en Calendar
+  var cfg = loadCfg();
+  if (val) {
+    syncCalendar(db.prospects[idx]);
+    alert(cfg.scriptUrl
+      ? '✅ Guardado · Recordatorio en Calendar'
+      : '✅ Guardado (configura Apps Script para Calendar)');
+  } else {
+    alert('✅ Guardado');
+  }
 }
 
 async function sendFuChat(){
