@@ -12,7 +12,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .nav{position:sticky;top:0;z-index:100;background:var(--surface);border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 16px;height:54px}
 .nav-title{font-size:17px;font-weight:600;letter-spacing:-.3px}
 .nav-sub{font-size:12px;color:var(--text-3)}
+.nav-actions{display:flex;gap:8px}
 .icon-btn{width:36px;height:36px;border-radius:50%;border:none;background:var(--surface-2);display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text);font-size:18px}
+.icon-btn:disabled{opacity:.5;cursor:default}
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;z-index:100;background:var(--surface);border-top:.5px solid var(--border);display:flex;padding-bottom:env(safe-area-inset-bottom)}
 .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;cursor:pointer;border:none;background:none;color:var(--text-3);font-size:10px;font-weight:500;transition:color .15s}
 .nav-item.active{color:var(--accent)}
@@ -111,7 +113,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <div class="nav-title">Prospector MD</div>
     <div class="nav-sub" id="nav-date"></div>
   </div>
-  <button class="icon-btn" onclick="openSettings()">⚙️</button>
+  <div class="nav-actions">
+    <button class="icon-btn" id="sync-now-btn" onclick="manualSyncNow()" title="Sincronizar ahora">🔄</button>
+    <button class="icon-btn" onclick="openSettings()">⚙️</button>
+  </div>
 </div>
 
 <div class="page active" id="page-today"><div id="today-content"></div></div>
@@ -146,7 +151,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     <div style="font-size:18px;font-weight:700;margin-bottom:20px">⚙️ Configuración</div>
     <div class="field"><label>API Key de Anthropic</label><input type="password" id="cfg-api-key" placeholder="sk-ant-..."/><div class="text-xs" style="margin-top:5px">Solo en este dispositivo. Nunca sale a ningún servidor.</div></div>
     <div class="divider"></div>
-    <div class="field"><label>Apps Script Web App URL</label><input type="text" id="cfg-script-url" placeholder="https://script.google.com/macros/s/..."/><div class="text-xs" style="margin-top:5px">Para sincronizar con Google Sheets y Calendar.</div></div>
+    <div class="field"><label>Apps Script Web App URL</label><input type="text" id="cfg-script-url" placeholder="https://script.google.com/macros/s/..."/><div class="text-xs" style="margin-top:5px">Para sincronizar con Google Sheets y Calendar. Debe ser la misma URL en todos tus dispositivos.</div></div>
     <div class="divider"></div>
     <div class="field"><label>Tu voz / cómo hablas</label><textarea id="cfg-voice" placeholder="Ej: Soy Carlos, asesor financiero. Soy directo pero cercano, uso lenguaje casual..." style="min-height:90px"></textarea></div>
     <button class="btn btn-primary btn-full" onclick="saveSettings()">Guardar configuración</button>
@@ -157,10 +162,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
 <script>
 // ── Storage ───────────────────────────────────────────────────────────────────
-var DB_KEY    = 'pmd_db_v3';
-var CFG_KEY   = 'pmd_cfg_v3';
-var BRAIN_KEY = 'pmd_brain_v3';
-var BCHAT_KEY = 'pmd_bchat_v3';
+var DB_KEY        = 'pmd_db_v3';
+var CFG_KEY       = 'pmd_cfg_v3';
+var BRAIN_KEY     = 'pmd_brain_v3';
+var BCHAT_KEY     = 'pmd_bchat_v3';
+var BCHAT_META_KEY  = 'pmd_bchat_meta_v3';
+var ADRAFT_KEY       = 'pmd_addchat_draft_v3';
+var ADRAFT_META_KEY  = 'pmd_addchat_draft_meta_v3';
 
 function loadDB()    { try { return JSON.parse(localStorage.getItem(DB_KEY))    || {prospects:[],interactions:[]}; } catch(e){ return {prospects:[],interactions:[]}; } }
 function saveDB(d)   { localStorage.setItem(DB_KEY, JSON.stringify(d)); }
@@ -168,9 +176,26 @@ function loadCfg()   { try { return JSON.parse(localStorage.getItem(CFG_KEY))   
 function saveCfg(c)  { localStorage.setItem(CFG_KEY, JSON.stringify(c)); }
 function loadBrain() { try { return JSON.parse(localStorage.getItem(BRAIN_KEY)) || {memories:[]}; } catch(e){ return {memories:[]}; } }
 function saveBrain(b){ localStorage.setItem(BRAIN_KEY, JSON.stringify(b)); }
-function loadBChat() { try { return JSON.parse(localStorage.getItem(BCHAT_KEY)) || []; } catch(e){ return []; } }
-function saveBChat(c){ localStorage.setItem(BCHAT_KEY, JSON.stringify(c.slice(-80))); }
-function uid()       { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function uid()        { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+function stampUpdated(p){ p.updatedAt = new Date().toISOString(); return p; }
+
+// Chat del Cerebro: guardamos el array + un timestamp aparte, para poder decidir
+// en la sincronización cuál copia (este dispositivo u otro) es más reciente.
+function loadBChat()      { try { return JSON.parse(localStorage.getItem(BCHAT_KEY)) || []; } catch(e){ return []; } }
+function loadBChatMeta()  { try { return JSON.parse(localStorage.getItem(BCHAT_META_KEY)) || {}; } catch(e){ return {}; } }
+function saveBChat(c, ts) {
+  localStorage.setItem(BCHAT_KEY, JSON.stringify((c||[]).slice(-80)));
+  localStorage.setItem(BCHAT_META_KEY, JSON.stringify({updatedAt: ts || new Date().toISOString()}));
+}
+
+// Borrador del chat de "Nuevo prospecto"
+function loadAddChatDraft()     { try { return JSON.parse(localStorage.getItem(ADRAFT_KEY)) || []; } catch(e){ return []; } }
+function loadAddChatDraftMeta() { try { return JSON.parse(localStorage.getItem(ADRAFT_META_KEY)) || {}; } catch(e){ return {}; } }
+function saveAddChatDraft() {
+  localStorage.setItem(ADRAFT_KEY, JSON.stringify(addChat||[]));
+  localStorage.setItem(ADRAFT_META_KEY, JSON.stringify({updatedAt: new Date().toISOString()}));
+}
+function clearAddChatDraft(){ localStorage.removeItem(ADRAFT_KEY); localStorage.removeItem(ADRAFT_META_KEY); }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 function openSettings() {
@@ -206,23 +231,46 @@ function showPage(name) {
   if (name==='brain')     renderBrain();
 }
 function openSheet(id)  { document.getElementById(id).classList.add('open'); }
-function closeSheet(id) { document.getElementById(id).classList.remove('open'); }
+function closeSheet(id) {
+  if (id==='sheet-detail' && currentId) persistFollowupDraft(currentId, true);
+  document.getElementById(id).classList.remove('open');
+}
 
-// ── Sync ──────────────────────────────────────────────────────────────────────
+// ── Sync: envío al backend ──────────────────────────────────────────────────
+// Devuelve true si se confirmó guardado en el servidor, false si falló, null si
+// no hay backend configurado (uso solo local, no es un error).
 async function postToSheets(payload) {
   var cfg = loadCfg();
-  if (!cfg.scriptUrl) return;
+  if (!cfg.scriptUrl) return null;
   try {
-    await fetch(cfg.scriptUrl, {method:'POST', body:JSON.stringify(payload), headers:{'Content-Type':'text/plain;charset=utf-8'}});
-  } catch(e){}
+    var res = await fetch(cfg.scriptUrl, {method:'POST', body:JSON.stringify(payload), headers:{'Content-Type':'text/plain;charset=utf-8'}});
+    try {
+      var data = await res.json();
+      return !(data && data.ok === false);
+    } catch(e2) {
+      return true; // la petición llegó pero no pudimos leer el cuerpo de la respuesta
+    }
+  } catch(e){
+    console.warn('postToSheets failed', e);
+    return false;
+  }
 }
 async function syncCalendar(p) {
   var cfg = loadCfg();
-  if (!cfg.scriptUrl || !p.nextContact) return;
-  try {
-    await postToSheets({type:'calendar', data:{prospectId:p.id, name:p.name, product:p.product, source:p.source||'', nextContact:new Date(p.nextContact).toISOString()}});
-  } catch(e){}
+  if (!cfg.scriptUrl || !p.nextContact) return null;
+  return await postToSheets({type:'calendar', data:{prospectId:p.id, name:p.name, product:p.product, source:p.source||'', nextContact:new Date(p.nextContact).toISOString()}});
 }
+
+function prospectForSync(p){
+  var copy = Object.assign({}, p);
+  copy._rec = p._rec ? JSON.stringify(p._rec) : '';
+  copy._fuChatDraft = (p._fuChatDraft && p._fuChatDraft.length) ? JSON.stringify(p._fuChatDraft) : '';
+  return copy;
+}
+
+// ── Sync: traer datos y fusionar por fecha de última edición ────────────────
+// Regla: para cada registro, gana la copia (local o remota) con el updatedAt
+// más reciente. Si el servidor marca algo como borrado, se borra aquí también.
 async function syncFromSheets() {
   var cfg = loadCfg();
   if (!cfg.scriptUrl) return false;
@@ -230,37 +278,185 @@ async function syncFromSheets() {
     var res  = await fetch(cfg.scriptUrl + '?t=' + Date.now());
     var data = await res.json();
     if (!data.ok) return false;
+
     if (data.prospects) {
       var localDB = loadDB();
-      var recCache = {};
-      localDB.prospects.forEach(function(p){ if(p._rec) recCache[p.id]=p._rec; });
-      var prospects = data.prospects.map(function(r){ return {
-        id:r.id,name:r.name,phone:r.phone||'',age:r.age||'',product:r.product||'',
-        investment:r.investment||'',city:r.city||'',status:r.status||'cold',
-        probability:Number(r.probability||20),source:r.source||'',sourceDetail:r.sourceDetail||'',
-        notes:r.notes||'',context:r.context||'',nextContact:r.nextContact||'',
-        createdAt:r.createdAt||new Date().toISOString(),_rec:recCache[r.id]||null
-      }; });
+      var localById = {};
+      localDB.prospects.forEach(function(p){ localById[p.id]=p; });
+
+      var merged = [];
+      var remoteIds = {};
+      data.prospects.forEach(function(r){
+        remoteIds[r.id] = true;
+        if (r.deleted === 'true') return; // se borró en otro dispositivo: no se agrega aquí
+
+        var remote = {
+          id:r.id,name:r.name,phone:r.phone||'',age:r.age||'',product:r.product||'',
+          investment:r.investment||'',city:r.city||'',status:r.status||'cold',
+          probability:Number(r.probability||20),source:r.source||'',sourceDetail:r.sourceDetail||'',
+          notes:r.notes||'',context:r.context||'',nextContact:r.nextContact||'',
+          createdAt:r.createdAt||new Date().toISOString(),
+          updatedAt:r.updatedAt||r.createdAt||'',
+          _rec:(function(){ try{ return r.rec ? JSON.parse(r.rec) : null; }catch(e){ return null; } })(),
+          _fuChatDraft:(function(){ try{ return r.fuChatDraft ? JSON.parse(r.fuChatDraft) : []; }catch(e){ return []; } })()
+        };
+        var local = localById[r.id];
+        if (!local) { merged.push(remote); return; }
+        var localTime  = local.updatedAt || local.createdAt || '';
+        var remoteTime = remote.updatedAt || remote.createdAt || '';
+        merged.push(localTime > remoteTime ? local : remote);
+      });
+      // Prospectos que solo existen en este dispositivo (aún no confirmados en el
+      // servidor, p.ej. por falta de red) no se pierden.
+      localDB.prospects.forEach(function(p){ if (!remoteIds[p.id]) merged.push(p); });
+
       var interactions = (data.interactions||[]).map(function(r){ return {
         id:r.id,prospectId:r.prospectId,date:r.date,summary:r.summary||'',sent:r.sent||'',response:r.response||''
       }; });
-      saveDB({prospects:prospects,interactions:interactions});
+      var remoteIntIds = {}; interactions.forEach(function(i){ remoteIntIds[i.id]=true; });
+      localDB.interactions.forEach(function(i){ if(!remoteIntIds[i.id]) interactions.push(i); });
+
+      saveDB({prospects:merged, interactions:interactions});
     }
+
     if (data.brain && data.brain.length) {
       var brain = loadBrain();
       data.brain.forEach(function(rm){
         var idx = brain.memories.findIndex(function(lm){ return lm.id===rm.id; });
-        if (idx===-1) brain.memories.push({id:rm.id,cat:rm.cat,text:rm.text,createdAt:rm.createdAt,deleted:rm.deleted==='true'});
-        else { brain.memories[idx].text=rm.text; brain.memories[idx].deleted=rm.deleted==='true'; }
+        var remoteTime = rm.updatedAt || rm.createdAt || '';
+        if (idx===-1) {
+          brain.memories.push({id:rm.id,cat:rm.cat,text:rm.text,createdAt:rm.createdAt,updatedAt:remoteTime,deleted:rm.deleted==='true'});
+        } else {
+          var localTime = brain.memories[idx].updatedAt || brain.memories[idx].createdAt || '';
+          if (remoteTime >= localTime) {
+            brain.memories[idx].text=rm.text;
+            brain.memories[idx].deleted=rm.deleted==='true';
+            brain.memories[idx].updatedAt=remoteTime;
+          }
+        }
       });
       saveBrain(brain);
     }
+
+    // Conversación del Cerebro y borrador de "Nuevo": solo se guardan en storage
+    // (no se pisa la variable en memoria) para no interrumpir si el asesor está
+    // escribiendo algo justo en ese momento. La próxima vez que se abra esa
+    // pantalla, se carga la versión más nueva.
+    if (data.brainChat && data.brainChat.chat) {
+      try {
+        var remoteChat = JSON.parse(data.brainChat.chat);
+        var localMeta = loadBChatMeta();
+        var remoteUpdated = data.brainChat.updatedAt || '';
+        if (remoteChat.length && remoteUpdated > (localMeta.updatedAt||'')) {
+          localStorage.setItem(BCHAT_KEY, JSON.stringify(remoteChat.slice(-80)));
+          localStorage.setItem(BCHAT_META_KEY, JSON.stringify({updatedAt: remoteUpdated}));
+        }
+      } catch(e){}
+    }
+    if (data.addChatDraft && data.addChatDraft.chat) {
+      try {
+        var remoteAdd = JSON.parse(data.addChatDraft.chat);
+        var localAddMeta = loadAddChatDraftMeta();
+        var remoteAddUpdated = data.addChatDraft.updatedAt || '';
+        if (remoteAdd.length && remoteAddUpdated > (localAddMeta.updatedAt||'')) {
+          localStorage.setItem(ADRAFT_KEY, JSON.stringify(remoteAdd));
+          localStorage.setItem(ADRAFT_META_KEY, JSON.stringify({updatedAt: remoteAddUpdated}));
+        }
+      } catch(e){}
+    }
+
     if (data.config && data.config.voice) {
       var cfg2 = loadCfg();
       if (!cfg2.voice) { cfg2.voice=data.config.voice; saveCfg(cfg2); }
     }
     return true;
   } catch(e){ console.warn('sync error',e); return false; }
+}
+
+// ── Guardado manual ───────────────────────────────────────────────────────
+async function persistFollowupDraft(id, silent){
+  var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===id;});
+  if(idx===-1)return;
+  db.prospects[idx]._fuChatDraft = fuChat;
+  stampUpdated(db.prospects[idx]);
+  saveDB(db);
+  var ok = await postToSheets({type:'prospect', data:prospectForSync(db.prospects[idx])});
+  if(!silent) alert(ok===false ? '⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo — revisa tu conexión.' : '✅ Guardado y sincronizado: recomendación, historial y conversación de seguimiento.');
+}
+function saveAddChatManual(){
+  if(!addChat.length){ alert('No hay conversación que guardar todavía.'); return; }
+  var ts=new Date().toISOString();
+  localStorage.setItem(ADRAFT_KEY, JSON.stringify(addChat));
+  localStorage.setItem(ADRAFT_META_KEY, JSON.stringify({updatedAt: ts}));
+  postToSheets({type:'draft', data:{id:'addchat_draft', chat:JSON.stringify(addChat), updatedAt: ts}}).then(function(ok){
+    alert(ok===false ? '⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.' : '✅ Conversación guardada y sincronizada. La verás aquí aunque cierres la app o cambies de dispositivo.');
+  });
+}
+function saveBrainChatManual(){
+  var ts=new Date().toISOString();
+  saveBChat(brainChat, ts);
+  postToSheets({type:'brainchat', data:{chat:JSON.stringify(brainChat), updatedAt: ts}}).then(function(ok){
+    alert(ok===false ? '⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.' : '✅ Conversación del Cerebro guardada y sincronizada.');
+  });
+}
+function saveAllDraftsNow(){
+  try{
+    saveAddChatDraft();
+    if(currentId) persistFollowupDraft(currentId, true);
+    saveBChat(brainChat);
+  }catch(e){}
+}
+
+// ── Sincronización automática en segundo plano ──────────────────────────────
+async function backgroundResync(){
+  var cfg=loadCfg(); if(!cfg.scriptUrl) return;
+  var ok = await syncFromSheets();
+  if(!ok) return;
+  // Solo refrescamos listas (sin inputs de texto vivos); la ficha abierta y el
+  // chat de Cerebro/Nuevo se actualizan la próxima vez que se abran, para no
+  // interrumpir si el asesor está escribiendo algo en ese momento.
+  var activePage = document.querySelector('.page.active');
+  if(activePage){
+    if(activePage.id==='page-today') renderToday();
+    if(activePage.id==='page-prospects') renderProspects();
+  }
+}
+
+async function manualSyncNow(){
+  var cfg=loadCfg();
+  if(!cfg.scriptUrl){ alert('Primero configura la URL de Apps Script en ⚙️ Configuración.'); return; }
+  var btn=document.getElementById('sync-now-btn');
+  if(btn){ btn.disabled=true; btn.textContent='⏳'; }
+  try{
+    var db=loadDB();
+    for(var i=0;i<db.prospects.length;i++){
+      await postToSheets({type:'prospect', data:prospectForSync(db.prospects[i])});
+    }
+    var brain=loadBrain();
+    for(var j=0;j<brain.memories.length;j++){
+      var m=brain.memories[j];
+      if(m.deleted) continue; // los borrados ya se comunicaron por su propio endpoint
+      await postToSheets({type:'brain', data:{id:m.id,cat:m.cat,text:m.text,createdAt:m.createdAt,updatedAt:m.updatedAt||m.createdAt}});
+    }
+    var addMeta=loadAddChatDraftMeta();
+    await postToSheets({type:'draft', data:{id:'addchat_draft', chat:JSON.stringify(loadAddChatDraft()), updatedAt: addMeta.updatedAt||new Date().toISOString()}});
+    var bMeta=loadBChatMeta();
+    await postToSheets({type:'brainchat', data:{chat:JSON.stringify(loadBChat()), updatedAt: bMeta.updatedAt||new Date().toISOString()}});
+
+    var ok = await syncFromSheets();
+
+    var activePage=document.querySelector('.page.active');
+    if(activePage){
+      if(activePage.id==='page-today') renderToday();
+      if(activePage.id==='page-prospects') renderProspects();
+      if(activePage.id==='page-brain') renderBrain();
+    }
+    if(currentId && document.getElementById('sheet-detail').classList.contains('open')) renderDetail();
+
+    alert(ok ? '✅ Todo sincronizado.' : '⚠️ No se pudo conectar con Google Sheets. Tus cambios siguen guardados en este dispositivo.');
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='🔄'; }
+  }
 }
 
 // ── Utils ─────────────────────────────────────────────────────────────────────
@@ -281,20 +477,42 @@ function statusBadge(s){
 }
 function productLabel(p){ return {gmm:'Gastos Médicos',retiro:'Plan de Retiro',vida:'Seguro de Vida',otro:'Otro'}[p]||p||''; }
 function sourceLabel(s){ return {recomendacion:'Recomendación',ukuvi:'Ukuvi',redes:'Redes sociales',evento:'Evento / Networking',frio:'Llamada en frío',otro:'Otro'}[s]||s||'—'; }
-function needsFollowup(p,interactions){
-  if(p.status==='closed'||p.status==='lost') return false;
-  var pInts=interactions.filter(function(i){return i.prospectId===p.id;}).sort(function(a,b){return new Date(b.date)-new Date(a.date);});
-  if(p.nextContact) return new Date(p.nextContact)<=new Date();
-  if(!pInts.length) return true;
-  return daysBetween(pInts[0].date)>=3;
+function isSameLocalDay(dateStr, ref){
+  if(!dateStr) return false;
+  var d=new Date(dateStr);
+  return d.getFullYear()===ref.getFullYear() && d.getMonth()===ref.getMonth() && d.getDate()===ref.getDate();
 }
+// "Contactar hoy" = el próximo contacto de la ficha cae exactamente en el día
+// de hoy (sin importar la hora). Ya no incluye prospectos atrasados de días
+// anteriores ni prospectos sin próximo contacto definido.
+function needsFollowup(p){
+  if(p.status==='closed'||p.status==='lost') return false;
+  if(!p.nextContact) return false;
+  return isSameLocalDay(p.nextContact, new Date());
+}
+// "Atrasado" = tenía próximo contacto definido, esa fecha ya pasó (día calendario
+// anterior a hoy) y sigue activo — o sea, no se actualizó en la fecha que tocaba.
+function isOverdue(p){
+  if(p.status==='closed'||p.status==='lost') return false;
+  if(!p.nextContact) return false;
+  var d=new Date(p.nextContact);
+  var now=new Date();
+  var dDay=new Date(d.getFullYear(),d.getMonth(),d.getDate());
+  var nowDay=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  return dDay < nowDay;
+}
+function goToOverdue(){ activeFilter='atrasado'; showPage('prospects'); }
 
 // ── TODAY ─────────────────────────────────────────────────────────────────────
 function renderToday(){
   var db=loadDB(); var cfg=loadCfg();
-  var due=db.prospects.filter(function(p){return needsFollowup(p,db.interactions);});
+  var due=db.prospects.filter(function(p){return needsFollowup(p);});
+  var overdue=db.prospects.filter(function(p){return isOverdue(p);});
   var html='';
   if(!cfg.apiKey) html+='<div class="api-banner">⚠️ Configura tu API key en ⚙️ para activar las recomendaciones de IA.</div>';
+  if(overdue.length) html+='<div class="api-banner" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px" onclick="goToOverdue()">'
+    +'<span>⏰ Tienes '+overdue.length+' seguimiento'+(overdue.length!==1?'s':'')+' atrasado'+(overdue.length!==1?'s':'')+'</span>'
+    +'<span style="font-weight:700">Ver →</span></div>';
   html+='<div class="section-header">Contactar hoy — '+due.length+'</div>';
   if(!due.length){
     html+='<div class="card"><div class="card-body" style="text-align:center;padding:32px 16px"><div style="font-size:36px;margin-bottom:8px">🎉</div><div style="font-weight:600;margin-bottom:4px">¡Estás al corriente!</div><div class="text-sm">Sin seguimientos pendientes.</div></div></div>';
@@ -329,8 +547,12 @@ var activeFilter='all';
 function setFilter(key){ activeFilter=key; renderProspects(); }
 function renderProspects(){
   var db=loadDB();
-  var filters=[{k:'all',l:'Todos'},{k:'hot',l:'🔥 Calientes'},{k:'warm',l:'🌡 Tibios'},{k:'cold',l:'❄️ Fríos'},{k:'closed',l:'✅ Cerrados'},{k:'lost',l:'❌ Perdidos'},{k:'gmm',l:'Gastos Médicos'},{k:'retiro',l:'Retiro'}];
-  var list=db.prospects.filter(function(p){return activeFilter==='all'||p.status===activeFilter||p.product===activeFilter;});
+  var filters=[{k:'all',l:'Todos'},{k:'atrasado',l:'⚠️ Atrasados'},{k:'hot',l:'🔥 Calientes'},{k:'warm',l:'🌡 Tibios'},{k:'cold',l:'❄️ Fríos'},{k:'closed',l:'✅ Cerrados'},{k:'lost',l:'❌ Perdidos'},{k:'gmm',l:'Gastos Médicos'},{k:'retiro',l:'Retiro'}];
+  var list=db.prospects.filter(function(p){
+    if(activeFilter==='all') return true;
+    if(activeFilter==='atrasado') return isOverdue(p);
+    return p.status===activeFilter||p.product===activeFilter;
+  });
   list=list.slice().sort(function(a,b){return new Date(b.createdAt)-new Date(a.createdAt);});
   var html='<div class="filter-bar">';
   filters.forEach(function(f){ html+='<div class="filter-chip'+(activeFilter===f.k?' active':'')+'" onclick="setFilter(\''+f.k+'\')">'+f.l+'</div>'; });
@@ -386,6 +608,7 @@ function renderAdd(){
       +'<div class="field"><label>Próximo contacto</label><input type="datetime-local" id="f-next" value="'+isoNext+'"/></div>'
       +'<button class="btn btn-primary btn-full" onclick="saveProspectForm()" style="margin-top:8px">Guardar prospecto</button>';
   } else {
+    if(!addChat.length) addChat=loadAddChatDraft();
     if(!addChat.length) addChat=[{role:'assistant',content:'Cuéntame sobre el prospecto. ¿Quién es, qué te dijo, cómo lo conociste?'}];
     html+='<div class="chat-container" id="add-chat-box">';
     addChat.forEach(function(m){
@@ -401,7 +624,9 @@ function renderAdd(){
       +'<button class="send-btn" onclick="sendAddMsg()"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg></button>'
       +'</div>'
       +'<div style="height:12px"></div>'
-      +'<button class="btn btn-secondary btn-full" onclick="addChat=[];renderAdd()">🔄 Empezar de nuevo</button>';
+      +'<button class="btn btn-secondary btn-full" onclick="clearAddChatDraft();addChat=[];renderAdd()">🔄 Empezar de nuevo</button>'
+      +'<div style="height:8px"></div>'
+      +'<button class="btn btn-success btn-full" onclick="saveAddChatManual()">💾 Guardar conversación</button>';
   }
   document.getElementById('add-content').innerHTML=html;
   var box=document.getElementById('add-chat-box');
@@ -411,6 +636,7 @@ function renderAdd(){
 function saveProspectForm(){
   var name=(document.getElementById('f-name').value||'').trim();
   if(!name){alert('El nombre es requerido');return;}
+  var ts=new Date().toISOString();
   var p={
     id:uid(),name:name,
     phone:(document.getElementById('f-phone').value||'').trim(),
@@ -424,22 +650,24 @@ function saveProspectForm(){
     notes:(document.getElementById('f-notes').value||'').trim(),
     context:(document.getElementById('f-context').value||'').trim(),
     nextContact:document.getElementById('f-next').value,
-    probability:20,createdAt:new Date().toISOString()
+    probability:20,createdAt:ts,updatedAt:ts
   };
   var db=loadDB(); db.prospects.push(p); saveDB(db);
-  postToSheets({type:'prospect',data:p});
+  postToSheets({type:'prospect',data:prospectForSync(p)});
   if(p.nextContact) syncCalendar(p);
-  addChat=[];
+  addChat=[]; clearAddChatDraft();
   showPage('today');
   setTimeout(function(){openProspect(p.id);},200);
 }
 
 function saveFromChat(encoded){
   var d=JSON.parse(decodeURIComponent(encoded));
-  var p=Object.assign({id:uid(),probability:20,createdAt:new Date().toISOString()},d);
+  var ts=new Date().toISOString();
+  var p=Object.assign({id:uid(),probability:20,createdAt:ts},d);
+  p.updatedAt=ts;
   var db=loadDB(); db.prospects.push(p); saveDB(db);
-  postToSheets({type:'prospect',data:p});
-  addChat=[];
+  postToSheets({type:'prospect',data:prospectForSync(p)});
+  addChat=[]; clearAddChatDraft();
   showPage('today');
   setTimeout(function(){openProspect(p.id);},200);
 }
@@ -453,6 +681,7 @@ async function sendAddMsg(){
   input.value='';
   addChat.push({role:'user',content:text});
   addChat.push({role:'assistant',content:LOADING_DOTS});
+  saveAddChatDraft();
   renderAdd();
   var sys='Eres asistente de un asesor de seguros mexicano. Extrae datos del prospecto conversacionalmente. Cuando tengas nombre y producto, responde con "---DATOS---" seguido de JSON en una línea: {"name":"","phone":"","age":"","product":"gmm|retiro|vida|otro","investment":"","city":"","status":"cold|warm|hot","notes":"","source":"otro","sourceDetail":"","context":""}. Si no tienes datos suficientes, sigue conversando en español casual.';
   var msgs=addChat.slice(0,-1).filter(function(m){return (m.role==='user'||m.role==='assistant')&&!m.isSaveBtn;}).map(function(m){return {role:m.role,content:m.content};});
@@ -466,13 +695,31 @@ async function sendAddMsg(){
       try{var ext=JSON.parse(reply.split('---DATOS---')[1].trim()); addChat.push({isSaveBtn:true,data:ext});}catch(e){}
     }
   }catch(e){addChat[addChat.length-1]={role:'assistant',content:'Error de conexión. Revisa tu API key.'};}
+  saveAddChatDraft();
   renderAdd();
 }
 
 // ── PROSPECT DETAIL ───────────────────────────────────────────────────────────
 var currentId=null, detailTab='followup', fuChat=[], genRunning=false;
 
-function openProspect(id){ currentId=id; detailTab='followup'; fuChat=[]; genRunning=false; renderDetail(); openSheet('sheet-detail'); }
+function openProspect(id){
+  currentId=id; detailTab='followup'; genRunning=false;
+  var db=loadDB(); var p=db.prospects.find(function(x){return x.id===id;});
+  fuChat=(p&&p._fuChatDraft)?p._fuChatDraft:[];
+  renderDetail(); openSheet('sheet-detail');
+  // Refresco en segundo plano: si otro dispositivo tiene una versión más nueva
+  // de este prospecto (o lo borró), lo reflejamos aquí sin bloquear la apertura.
+  var cfg=loadCfg();
+  if(cfg.scriptUrl){
+    syncFromSheets().then(function(ok){
+      if(!ok || currentId!==id) return;
+      if(!document.getElementById('sheet-detail').classList.contains('open')) return;
+      var db2=loadDB(); var p2=db2.prospects.find(function(x){return x.id===id;});
+      if(p2){ fuChat=(p2._fuChatDraft&&p2._fuChatDraft.length)?p2._fuChatDraft:fuChat; renderDetail(); }
+      else { closeSheet('sheet-detail'); renderToday(); alert('Este prospecto se eliminó desde otro dispositivo.'); }
+    });
+  }
+}
 function switchDetailTab(t){ detailTab=t; renderDetail(); }
 
 function buildBrainCtx(){
@@ -516,7 +763,9 @@ async function generateRec(){
     if(idx!==-1){
       db2.prospects[idx]._rec=rec;
       if(!db2.prospects[idx].nextContact){var nd=new Date();nd.setDate(nd.getDate()+(rec.nextDays||3));db2.prospects[idx].nextContact=nd.toISOString().slice(0,16);}
+      stampUpdated(db2.prospects[idx]);
       saveDB(db2);
+      postToSheets({type:'prospect', data:prospectForSync(db2.prospects[idx])});
     }
   }catch(e){console.error('rec error',e);}
   genRunning=false; renderDetail();
@@ -530,10 +779,14 @@ async function saveNextContact(){
   var val=document.getElementById('nc-input')?document.getElementById('nc-input').value:'';
   var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===currentId;});
   if(idx===-1)return;
-  db.prospects[idx].nextContact=val; saveDB(db);
+  db.prospects[idx].nextContact=val;
+  stampUpdated(db.prospects[idx]);
+  saveDB(db);
   var cfg=loadCfg();
-  if(val){ syncCalendar(db.prospects[idx]); alert(cfg.scriptUrl?'✅ Guardado · Recordatorio en Calendar':'✅ Guardado'); }
-  else alert('✅ Guardado');
+  var okProspect = await postToSheets({type:'prospect', data:prospectForSync(db.prospects[idx])});
+  if(val) await syncCalendar(db.prospects[idx]);
+  if(okProspect===false) alert('⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.');
+  else alert(cfg.scriptUrl && val ? '✅ Guardado · Recordatorio en Calendar' : '✅ Guardado');
 }
 
 async function sendFuChat(){
@@ -564,39 +817,58 @@ async function sendFuChat(){
         var interaction={id:uid(),prospectId:currentId,date:new Date().toISOString(),summary:intData.summary||'',sent:intData.sent||'',response:intData.response||''};
         db2.interactions.push(interaction);
         var pidx=db2.prospects.findIndex(function(x){return x.id===currentId;});
-        if(pidx!==-1&&intData.response){db2.prospects[pidx].probability=Math.min(95,(db2.prospects[pidx].probability||20)+10);delete db2.prospects[pidx]._rec;}
+        if(pidx!==-1&&intData.response){
+          db2.prospects[pidx].probability=Math.min(95,(db2.prospects[pidx].probability||20)+10);
+          delete db2.prospects[pidx]._rec;
+        }
+        if(pidx!==-1) stampUpdated(db2.prospects[pidx]);
         saveDB(db2);
         postToSheets({type:'interaction',data:interaction});
       }catch(e){}
     }
   }catch(e){fuChat[fuChat.length-1]={role:'assistant',content:'Error de conexión.'};}
+  // Sube el prospecto completo (con el % actualizado si cambió) junto con el
+  // borrador del chat, en un solo paso.
+  persistFollowupDraft(currentId, true);
   renderDetail();
 }
 
-function updateStatus(id){
+async function updateStatus(id){
   var order=['cold','warm','hot','closed','lost'];
   var labels={cold:'❄️ Frío',warm:'🌡 Tibio',hot:'🔥 Caliente',closed:'✅ Cerrado',lost:'❌ Perdido'};
   var db=loadDB(); var p=db.prospects.find(function(x){return x.id===id;});
   var cur=order.indexOf(p.status||'cold'); var nxt=(cur+1)%order.length;
   if(!confirm('Cambiar a '+labels[order[nxt]]+'?'))return;
   var idx=db.prospects.findIndex(function(x){return x.id===id;});
-  db.prospects[idx].status=order[nxt]; delete db.prospects[idx]._rec; saveDB(db);
-  postToSheets({type:'prospect',data:db.prospects[idx]});
+  db.prospects[idx].status=order[nxt]; delete db.prospects[idx]._rec;
+  stampUpdated(db.prospects[idx]);
+  saveDB(db);
   renderDetail();
+  await postToSheets({type:'prospect',data:prospectForSync(db.prospects[idx])});
 }
-function updateProb(id){
+async function updateProb(id){
   var val=prompt('Probabilidad de cierre (0-100):'); if(val===null)return;
   var n=parseInt(val); if(isNaN(n)||n<0||n>100){alert('Número entre 0 y 100');return;}
   var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===id;});
-  if(idx!==-1){db.prospects[idx].probability=n;saveDB(db);renderDetail();}
+  if(idx!==-1){
+    db.prospects[idx].probability=n;
+    stampUpdated(db.prospects[idx]);
+    saveDB(db);
+    renderDetail();
+    await postToSheets({type:'prospect',data:prospectForSync(db.prospects[idx])});
+  }
 }
-function saveProfileEdits(id){
+async function saveProfileEdits(id){
   var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===id;});
   if(idx===-1)return;
   var p=db.prospects[idx];
   var fields={notes:'e-notes',context:'e-context',phone:'e-phone',city:'e-city',investment:'e-invest',age:'e-age',source:'e-source',sourceDetail:'e-srcdet'};
   Object.keys(fields).forEach(function(k){var el=document.getElementById(fields[k]);if(el)p[k]=el.value;});
-  saveDB(db); postToSheets({type:'prospect',data:p}); alert('✅ Datos actualizados'); renderDetail();
+  stampUpdated(p);
+  saveDB(db);
+  renderDetail();
+  var ok = await postToSheets({type:'prospect',data:prospectForSync(p)});
+  alert(ok===false ? '⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.' : '✅ Datos actualizados y sincronizados.');
 }
 function deleteProspect(id){
   if(!confirm('¿Eliminar este prospecto?'))return;
@@ -666,6 +938,7 @@ function renderDetail(){
       });
       html+='</div>';
     }
+    html+='<button class="btn btn-success btn-full" onclick="persistFollowupDraft(\''+p.id+'\')" style="margin-bottom:8px">💾 Guardar recomendación, historial y conversación</button>';
     html+='<div class="divider"></div><div style="display:flex;gap:8px">'
       +'<button class="btn btn-secondary btn-sm" onclick="updateStatus(\''+p.id+'\')" style="flex:1">Cambiar estado</button>'
       +'<button class="btn btn-danger btn-sm" onclick="deleteProspect(\''+p.id+'\')">🗑</button>'
@@ -732,7 +1005,10 @@ function renderBrain(){
   var html='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">'
     +'<div><div style="font-size:20px;font-weight:700">🧠 Cerebro</div>'
     +'<div class="text-xs" style="margin-top:2px">'+mems.length+' memoria'+(mems.length!==1?'s':'')+' activa'+(mems.length!==1?'s':'')+'</div></div>'
+    +'<div style="display:flex;gap:6px">'
+    +(brainTab==='chat'?'<button class="btn btn-success btn-sm" onclick="saveBrainChatManual()">💾 Guardar</button>':'')
     +'<button class="btn btn-secondary btn-sm" onclick="clearBrainChat()">Limpiar chat</button>'
+    +'</div>'
     +'</div>'
     +'<div class="tabs">'
     +'<button class="tab'+(brainTab==='chat'?' active':'')+'" onclick="switchBrainTab(\'chat\')">💬 Conversación</button>'
@@ -773,7 +1049,9 @@ function renderBrain(){
       +'<div class="chat-input-row">'
       +'<textarea id="brain-input" placeholder="Habla con tu cerebro..." rows="1" style="border-radius:20px" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendBrainChat();}"></textarea>'
       +'<button class="send-btn" onclick="sendBrainChat()"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg></button>'
-      +'</div>';
+      +'</div>'
+      +'<div style="height:8px"></div>'
+      +'<button class="btn btn-success btn-full" onclick="saveBrainChatManual()">💾 Guardar esta conversación</button>';
   } else {
     if(!mems.length){ html+='<div class="empty"><div class="empty-icon">📌</div><h3>Sin memorias todavía</h3><p>En la conversación, toca "Guardar" cuando quieras fijar algo permanentemente.</p></div>'; }
     else {
@@ -833,7 +1111,8 @@ async function sendBrainChat(){
 
 function saveBrainMem(idx){
   var m=brainChat[idx]; if(!m||!m.memData)return;
-  var mem={id:uid(),cat:m.memData.cat,text:m.memData.text,createdAt:new Date().toISOString()};
+  var ts=new Date().toISOString();
+  var mem={id:uid(),cat:m.memData.cat,text:m.memData.text,createdAt:ts,updatedAt:ts};
   var brain=loadBrain(); brain.memories.push(mem); saveBrain(brain);
   postToSheets({type:'brain',data:mem});
   brainChat[idx].memSaved=true; saveBChat(brainChat); renderBrain();
@@ -843,34 +1122,48 @@ function addMemManual(){
   var cat=document.getElementById('nm-cat').value;
   var text=(document.getElementById('nm-text').value||'').trim();
   if(!text){alert('Escribe la memoria primero');return;}
-  var mem={id:uid(),cat:cat,text:text,createdAt:new Date().toISOString()};
+  var ts=new Date().toISOString();
+  var mem={id:uid(),cat:cat,text:text,createdAt:ts,updatedAt:ts};
   var brain=loadBrain(); brain.memories.push(mem); saveBrain(brain);
   postToSheets({type:'brain',data:mem}); renderBrain();
 }
 function deleteMem(id,silent){
   if(!silent&&!confirm('¿Eliminar esta memoria?'))return;
   var brain=loadBrain(); var idx=brain.memories.findIndex(function(m){return m.id===id;});
-  if(idx!==-1){brain.memories[idx].deleted=true;saveBrain(brain);}
+  if(idx!==-1){brain.memories[idx].deleted=true;brain.memories[idx].updatedAt=new Date().toISOString();saveBrain(brain);}
   postToSheets({type:'brain_delete',data:{id:id}});
   if(!silent)renderBrain();
 }
 function editMemById(id,newText){
   var brain=loadBrain(); var idx=brain.memories.findIndex(function(m){return m.id===id;});
-  if(idx!==-1){brain.memories[idx].text=newText;saveBrain(brain);postToSheets({type:'brain',data:{id:id,cat:brain.memories[idx].cat,text:newText,createdAt:brain.memories[idx].createdAt}});}
+  if(idx!==-1){
+    brain.memories[idx].text=newText;
+    brain.memories[idx].updatedAt=new Date().toISOString();
+    saveBrain(brain);
+    postToSheets({type:'brain',data:{id:id,cat:brain.memories[idx].cat,text:newText,createdAt:brain.memories[idx].createdAt,updatedAt:brain.memories[idx].updatedAt}});
+  }
 }
 function editMem(id){
   var brain=loadBrain(); var mem=brain.memories.find(function(m){return m.id===id;});
   if(!mem)return;
   var newText=prompt('Editar memoria:',mem.text);
   if(!newText||!newText.trim())return;
-  mem.text=newText.trim(); saveBrain(brain);
-  postToSheets({type:'brain',data:{id:id,cat:mem.cat,text:mem.text,createdAt:mem.createdAt}}); renderBrain();
+  mem.text=newText.trim();
+  mem.updatedAt=new Date().toISOString();
+  saveBrain(brain);
+  postToSheets({type:'brain',data:{id:id,cat:mem.cat,text:mem.text,createdAt:mem.createdAt,updatedAt:mem.updatedAt}}); renderBrain();
 }
 function clearBrainChat(){ if(!confirm('¿Limpiar conversación? Las memorias no se borran.'))return; brainChat=[];saveBChat(brainChat);renderBrain(); }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.getElementById('nav-date').textContent=new Date().toLocaleDateString('es-MX',{weekday:'long',day:'numeric',month:'long'});
 renderToday();
+
+document.addEventListener('visibilitychange', function(){
+  if(document.visibilityState==='hidden') { saveAllDraftsNow(); }
+  else if(document.visibilityState==='visible') { backgroundResync(); }
+});
+window.addEventListener('pagehide', saveAllDraftsNow);
 
 (async function(){
   var cfg=loadCfg();
