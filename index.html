@@ -104,6 +104,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .loading-dots span:nth-child(2){animation-delay:.2s}
 .loading-dots span:nth-child(3){animation-delay:.4s}
 @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
+@keyframes pulse-mic{0%,100%{box-shadow:0 0 0 0 rgba(220,38,38,.4)}70%{box-shadow:0 0 0 8px rgba(220,38,38,0)}}
+.mic-btn{width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px;background:var(--surface-2);color:var(--text-2);transition:background .2s,color .2s}
+.mic-btn.listening{background:var(--danger);color:white;animation:pulse-mic 1.2s infinite}
+.mic-btn:disabled{opacity:.4;cursor:default}
 </style>
 </head>
 <body>
@@ -620,7 +624,8 @@ function renderAdd(){
     });
     html+='</div>'
       +'<div class="chat-input-row">'
-      +'<textarea id="add-chat-input" placeholder="Cuéntame sobre el cliente..." rows="1" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendAddMsg();}"></textarea>'
+      +'<button class="mic-btn" id="add-mic-btn" onclick="toggleMic(\'add-chat-input\',\'add-mic-btn\')" title="Hablar">🎤</button>'
+      +'<textarea id="add-chat-input" placeholder="Cuéntame sobre el cliente... o toca 🎤 para hablar..." rows="1" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendAddMsg();}"></textarea>'
       +'<button class="send-btn" onclick="sendAddMsg()"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg></button>'
       +'</div>'
       +'<div style="height:12px"></div>'
@@ -775,31 +780,18 @@ function refreshRec(){ var db=loadDB(); var idx=db.prospects.findIndex(function(
 
 function copyMsg(encoded){ var msg=decodeURIComponent(encoded); if(navigator.clipboard){navigator.clipboard.writeText(msg).then(function(){alert('✅ Copiado');}).catch(function(){prompt('Copia:',msg);});}else{prompt('Copia:',msg);} }
 
-async function saveNextContact() {
-  var val = document.getElementById('nc-input')
-            ? document.getElementById('nc-input').value : '';
-  var db  = loadDB();
-  var idx = db.prospects.findIndex(function(x){ return x.id === currentId; });
-  if (idx === -1) return;
-
-  // 1. Actualiza en localStorage
-  db.prospects[idx].nextContact = val;
-  db.prospects[idx].updatedAt   = new Date().toISOString();
+async function saveNextContact(){
+  var val=document.getElementById('nc-input')?document.getElementById('nc-input').value:'';
+  var db=loadDB(); var idx=db.prospects.findIndex(function(x){return x.id===currentId;});
+  if(idx===-1)return;
+  db.prospects[idx].nextContact=val;
+  stampUpdated(db.prospects[idx]);
   saveDB(db);
-
-  // 2. Sube el prospecto completo a Sheets (incluye nextContact)
-  postToSheets({ type: 'prospect', data: db.prospects[idx] });
-
-  // 3. Crea/actualiza el evento en Calendar
-  var cfg = loadCfg();
-  if (val) {
-    syncCalendar(db.prospects[idx]);
-    alert(cfg.scriptUrl
-      ? '✅ Guardado · Recordatorio en Calendar'
-      : '✅ Guardado (configura Apps Script para Calendar)');
-  } else {
-    alert('✅ Guardado');
-  }
+  var cfg=loadCfg();
+  var okProspect = await postToSheets({type:'prospect', data:prospectForSync(db.prospects[idx])});
+  if(val) await syncCalendar(db.prospects[idx]);
+  if(okProspect===false) alert('⚠️ Guardado en este dispositivo, pero no se pudo subir a la nube todavía. Reintentará solo.');
+  else alert(cfg.scriptUrl && val ? '✅ Guardado · Recordatorio en Calendar' : '✅ Guardado');
 }
 
 async function sendFuChat(){
@@ -933,7 +925,8 @@ function renderDetail(){
     fuChat.forEach(function(m){ html+='<div class="bubble bubble-'+(m.role==='user'?'user':'ai')+'">'+(m.content===LOADING_DOTS?m.content:esc(m.content))+'</div>'; });
     html+='</div>'
       +'<div class="chat-input-row">'
-      +'<textarea id="fu-input" placeholder="Le mandé... / Me respondió... / Ajusta el mensaje..." rows="1" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendFuChat();}"></textarea>'
+      +'<button class="mic-btn" id="fu-mic-btn" onclick="toggleMic(\'fu-input\',\'fu-mic-btn\')" title="Hablar">🎤</button>'
+      +'<textarea id="fu-input" placeholder="Le mandé... / Me respondió... o toca 🎤 para hablar..." rows="1" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendFuChat();}"></textarea>'
       +'<button class="send-btn" onclick="sendFuChat()"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg></button>'
       +'</div>'
       +'<div class="divider"></div>'
@@ -1060,7 +1053,8 @@ function renderBrain(){
     quickies.forEach(function(q){ html+='<button class="filter-chip" onclick="setBrainQuick(\''+encodeURIComponent(q[1])+'\')">'+q[0]+'</button>'; });
     html+='</div>'
       +'<div class="chat-input-row">'
-      +'<textarea id="brain-input" placeholder="Habla con tu cerebro..." rows="1" style="border-radius:20px" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendBrainChat();}"></textarea>'
+      +'<button class="mic-btn" id="brain-mic-btn" onclick="toggleMic(\'brain-input\',\'brain-mic-btn\')" title="Hablar">🎤</button>'
+      +'<textarea id="brain-input" placeholder="Habla con tu cerebro... o toca 🎤 para hablar..." rows="1" style="border-radius:20px" onkeydown="if(event.key===\'Enter\'&&!event.shiftKey){event.preventDefault();sendBrainChat();}"></textarea>'
       +'<button class="send-btn" onclick="sendBrainChat()"><svg viewBox="0 0 24 24"><path d="M22 2L11 13M22 2L15 22l-4-9-9-4 20-7z"/></svg></button>'
       +'</div>'
       +'<div style="height:8px"></div>'
@@ -1189,6 +1183,101 @@ window.addEventListener('pagehide', saveAllDraftsNow);
   setTimeout(function(){navSub.textContent=dateText;},2500);
   if(ok)renderToday();
 })();
+// ── SPEECH TO TEXT ────────────────────────────────────────────────────────────
+var _recognition    = null;   // active SpeechRecognition instance
+var _activeMicBtn   = null;   // id of the currently lit mic button
+var _activeInputId  = null;   // id of the textarea being filled
+
+function toggleMic(inputId, btnId) {
+  // If already listening on this button → stop
+  if (_activeMicBtn === btnId && _recognition) {
+    _recognition.stop();
+    return;
+  }
+  // If listening on a different button → stop that one first
+  if (_recognition) { _recognition.stop(); }
+
+  // Check browser support
+  var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    alert('Tu navegador no soporta reconocimiento de voz. Usa Chrome o Safari.');
+    return;
+  }
+
+  _activeInputId = inputId;
+  _activeMicBtn  = btnId;
+
+  _recognition = new SR();
+  _recognition.lang = 'es-MX';
+  _recognition.continuous = true;      // keep recording until user stops
+  _recognition.interimResults = true;  // show partial results while speaking
+
+  var baseValue = '';  // text already in the textarea before we started
+
+  _recognition.onstart = function() {
+    var btn = document.getElementById(btnId);
+    if (btn) btn.classList.add('listening');
+    var inp = document.getElementById(inputId);
+    if (inp) {
+      baseValue = inp.value;
+      if (baseValue && !baseValue.endsWith(' ')) baseValue += ' ';
+    }
+  };
+
+  _recognition.onresult = function(event) {
+    var interim = '';
+    var final   = '';
+    for (var i = event.resultIndex; i < event.results.length; i++) {
+      var t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) { final += t + ' '; }
+      else                          { interim += t; }
+    }
+    var inp = document.getElementById(inputId);
+    if (inp) {
+      inp.value = baseValue + final + interim;
+      // Auto-grow
+      inp.style.height = 'auto';
+      inp.style.height = Math.min(inp.scrollHeight, 120) + 'px';
+    }
+    if (final) baseValue = baseValue + final;
+  };
+
+  _recognition.onerror = function(e) {
+    // 'no-speech' just means silence — not a real error, ignore it
+    if (e.error === 'no-speech') return;
+    if (e.error === 'not-allowed') {
+      alert('Permiso de micrófono denegado. Actívalo en la configuración de tu navegador.');
+    }
+    stopMic(btnId);
+  };
+
+  _recognition.onend = function() {
+    // continuous = true but browser stopped anyway (e.g. silence timeout on iOS)
+    // Clean up UI only if this is still the active session
+    if (_activeMicBtn === btnId) stopMic(btnId);
+  };
+
+  _recognition.start();
+}
+
+function stopMic(btnId) {
+  if (_recognition) {
+    try { _recognition.stop(); } catch(e) {}
+    _recognition = null;
+  }
+  _activeMicBtn  = null;
+  _activeInputId = null;
+  var btn = document.getElementById(btnId);
+  if (btn) btn.classList.remove('listening');
+}
+
+// Stop mic when closing any sheet (avoids background recording)
+document.querySelectorAll('.sheet-overlay').forEach(function(el) {
+  el.addEventListener('click', function(e) {
+    if (e.target === el && _recognition) stopMic(_activeMicBtn);
+  });
+});
+
 </script>
 </body>
 </html>
